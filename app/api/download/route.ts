@@ -7,7 +7,7 @@ import { put } from '@vercel/blob';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 900; // 15 min Background Function
+export const maxDuration = 300; // 15 min Background Function
 
 async function run(cmd: string, args: string[], cwd?: string): Promise<{ stdout: string, stderr: string, code: number }> {
   return new Promise((resolve) => {
