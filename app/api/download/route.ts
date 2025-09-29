@@ -3,10 +3,11 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { put } from '@vercel/blob';
+import ffmpegPath from 'ffmpeg-static'; // <- NUEVO
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 300; // plan Hobby
+export const maxDuration = 300; // Hobby
 
 function run(cmd: string, args: string[], cwd?: string): Promise<{ stdout: string, stderr: string, code: number }> {
   return new Promise((resolve) => {
@@ -14,20 +15,15 @@ function run(cmd: string, args: string[], cwd?: string): Promise<{ stdout: strin
     let out = '', err = '';
     p.stdout?.on('data', d => out += d.toString());
     p.stderr?.on('data', d => err += d.toString());
-    p.on('error', (e) => {
-      err += (err ? '\n' : '') + (e?.message || String(e));
-      resolve({ stdout: out, stderr: err, code: 127 });
-    });
+    p.on('error', (e) => { err += (err ? '\n' : '') + (e?.message || String(e)); resolve({ stdout: out, stderr: err, code: 127 }); });
     p.on('close', code => resolve({ stdout: out, stderr: err, code: code ?? 0 }));
   });
 }
 
-function resolveBins() {
+function resolveYtDlp() {
   const isWin = process.platform === 'win32';
   const root = process.cwd();
-  const ytdlp = isWin ? path.join(root, 'bin', 'win', 'yt-dlp.exe') : path.join(root, 'bin', 'yt-dlp');
-  const ffmpeg = isWin ? path.join(root, 'bin', 'win', 'ffmpeg.exe') : path.join(root, 'bin', 'ffmpeg');
-  return { ytdlp, ffmpeg };
+  return isWin ? path.join(root, 'bin', 'win', 'yt-dlp.exe') : path.join(root, 'bin', 'yt-dlp');
 }
 
 function sanitize(name: string, maxLen = 200) {
@@ -53,24 +49,28 @@ export async function POST(req: NextRequest) {
     if (!url) return NextResponse.json({ error: 'Missing url' }, { status: 400 });
     const fmt = (format || 'flac').toLowerCase();
 
-    const { ytdlp, ffmpeg } = resolveBins();
+    const ytdlp = resolveYtDlp();
 
-    // Asegurar binarios y permisos
+    // Verifica yt-dlp; ffmpeg viene de ffmpeg-static
     try {
       await fs.access(ytdlp);
-      await fs.access(ffmpeg);
       if (process.platform !== 'win32') {
         await fs.chmod(ytdlp, 0o755);
-        await fs.chmod(ffmpeg, 0o755);
       }
     } catch {
-      return NextResponse.json({ error: 'Faltan binarios (yt-dlp/ffmpeg) en ./bin' }, { status: 500 });
+      return NextResponse.json({ error: 'yt-dlp no encontrado. Sube bin/yt-dlp (Linux) y bin/win/yt-dlp.exe para local.' }, { status: 500 });
     }
 
-    // Probe + límite rápido para Hobby (evita timeout)
+    // ffmpeg-static debe resolver una ruta válida
+    const ffmpeg = ffmpegPath as string;
+    if (!ffmpeg) {
+      return NextResponse.json({ error: 'No se pudo resolver ffmpeg-static' }, { status: 500 });
+    }
+
+    // Probe + límite por plan Hobby
     const { id, title, duration } = await probe(ytdlp, url);
-    if (duration && duration > 600) { // p.ej. >10 min
-      return NextResponse.json({ error: 'El video es muy largo para el plan actual (máx ~5min de ejecución). Prueba MP3/OPUS o un clip más corto.' }, { status: 400 });
+    if (duration && duration > 600) {
+      return NextResponse.json({ error: 'El video es muy largo para el plan actual (máx ~5min de ejecución).' }, { status: 400 });
     }
 
     const base = sanitize(`${title}.${id}`);
