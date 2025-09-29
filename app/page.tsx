@@ -14,18 +14,28 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
 
   async function fetchInfo() {
-    setError(null);
-    setInfo(null);
-    setDownloadUrl(null);
-    try {
-      const res = await fetch(`/api/info?q=${encodeURIComponent(url)}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error al obtener info');
-      setInfo(data);
-    } catch (e:any) {
-      setError(e.message);
+  setError(null);
+  setInfo(null);
+  setDownloadUrl(null);
+  try {
+    const res = await fetch(`/api/info?q=${encodeURIComponent(url)}`);
+    const text = await res.text();
+    if (!res.ok) {
+      // si el server devolvió JSON de error, inténtalo:
+      try {
+        const data = JSON.parse(text);
+        throw new Error(data.error || data.details || 'Error al obtener info');
+      } catch {
+        throw new Error(text || 'Error al obtener info');
+      }
     }
+    const data = JSON.parse(text);
+    setInfo(data);
+  } catch (e:any) {
+    setError(e.message);
   }
+}
+
 
   async function doDownload() {
     setError(null);
