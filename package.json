@@ -5,19 +5,20 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
-    "postinstall": "node scripts/fetch-binaries.cjs"
+    "start": "next start"
+    // 👈 elimina "postinstall": "node scripts/fetch-binaries.cjs"
   },
   "dependencies": {
     "@vercel/blob": "latest",
+    "ffmpeg-static": "^5.2.0",       // 👈 agregado
     "next": "14.2.5",
     "react": "18.2.0",
     "react-dom": "18.2.0"
   },
   "devDependencies": {
-    "typescript": "5.5.4",
     "@types/node": "20.11.30",
     "@types/react": "18.2.66",
-    "@types/react-dom": "18.2.21"
+    "@types/react-dom": "18.2.21",
+    "typescript": "5.5.4"
   }
 }
