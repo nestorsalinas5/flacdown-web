@@ -14,26 +14,25 @@ function sanitize(name: string, maxLen = 200) {
   return cleaned.slice(0, maxLen);
 }
 
-async function ensureBinary() {
-  try {
-    const p = await YTDlpWrap.getYtdlpBinary();
-    return p;
-  } catch {
-    await YTDlpWrap.downloadFromGithub();
-    return await YTDlpWrap.getYtdlpBinary();
-  }
-}
-
-async function runYtdlp(args: string[], cwd?: string) {
+async function runYtDlp(args: string[], cwd?: string): Promise<{ out: string; err: string; code: number }> {
   const ytdlp = new YTDlpWrap();
-  return await new Promise<{ out: string; err: string; code: number }>((resolve) => {
+  return await new Promise((resolve) => {
     let out = "", err = "";
     const p = ytdlp.exec(args, { cwd });
-    p.stdout?.on("data", (d) => (out += d.toString()));
-    p.stderr?.on("data", (d) => (err += d.toString()));
+    p.stdout?.on("data", d => (out += d.toString()));
+    p.stderr?.on("data", d => (err += d.toString()));
     p.once("error", (e) => resolve({ out, err: err || (e as any)?.message || "spawn error", code: 127 }));
     p.once("close", (code) => resolve({ out, err, code: code ?? 0 }));
   });
+}
+
+async function runWithAutoDownload(args: string[], cwd?: string) {
+  let res = await runYtDlp(args, cwd);
+  if (res.code === 127 || /ENOENT|not found|no such file/i.test(res.err)) {
+    await YTDlpWrap.downloadFromGithub(); // baja el ejecutable oficial
+    res = await runYtDlp(args, cwd);
+  }
+  return res;
 }
 
 export async function POST(req: NextRequest) {
@@ -42,10 +41,8 @@ export async function POST(req: NextRequest) {
     if (!url) return NextResponse.json({ error: "Missing url" }, { status: 400 });
     const fmt = (format || "flac").toLowerCase();
 
-    await ensureBinary();
-
     // 1) Probe
-    const probe = await runYtdlp(["--dump-single-json", "--no-warnings", url]);
+    const probe = await runWithAutoDownload(["--dump-single-json", "--no-warnings", url]);
     if (probe.code !== 0) {
       return NextResponse.json({ error: "yt-dlp probe error", details: probe.err || probe.out }, { status: 500 });
     }
@@ -55,11 +52,12 @@ export async function POST(req: NextRequest) {
     const title = entry?.title || "audio";
     const duration = entry?.duration ?? 0;
 
+    // Límite rápido para Hobby (evita timeouts >300s)
     if (duration && duration > 600) {
       return NextResponse.json({ error: "El video es muy largo para el plan actual (~5 min de ejecución)." }, { status: 400 });
     }
 
-    // 2) Descargar/convertir
+    // 2) Descargar/convertir a /tmp
     const base = sanitize(`${title}.${id}`);
     const outTpl = `${base}.%(ext)s`;
     const args = [
@@ -68,7 +66,7 @@ export async function POST(req: NextRequest) {
       "--ffmpeg-location", String(ffmpegPath),
       "-o", outTpl, url
     ];
-    const dl = await runYtdlp(args, "/tmp");
+    const dl = await runWithAutoDownload(args, "/tmp");
     if (dl.code !== 0) {
       return NextResponse.json({ error: "Fallo yt-dlp", details: dl.err || dl.out }, { status: 500 });
     }
