@@ -1,33 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { spawn } from "node:child_process";
-import fs from "node:fs/promises";
 import path from "node:path";
-import { put } from "@vercel/blob";
+import fs from "node:fs/promises";
 import ffmpegPath from "ffmpeg-static";
+import { put } from "@vercel/blob";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 300; // plan Hobby
-
-async function ensureYtDlp(): Promise<string> {
-  const candidates = [
-    "/var/task/bin/yt-dlp",
-    path.join(process.cwd(), "bin", "yt-dlp")
-  ];
-  for (const c of candidates) {
-    try { await fs.access(c); return c; } catch {}
-  }
-  const tmpPath = "/tmp/yt-dlp";
-  try { await fs.access(tmpPath); return tmpPath; } catch {}
-
-  const url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`No se pudo descargar yt-dlp (${res.status})`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  await fs.writeFile(tmpPath, buf);
-  await fs.chmod(tmpPath, 0o755);
-  return tmpPath;
-}
+export const maxDuration = 300;
 
 function run(cmd: string, args: string[], cwd?: string): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
@@ -35,12 +15,18 @@ function run(cmd: string, args: string[], cwd?: string): Promise<{ stdout: strin
     let out = "", err = "";
     p.stdout?.on("data", d => (out += d.toString()));
     p.stderr?.on("data", d => (err += d.toString()));
-    p.on("error", (e) => {
+    p.on("error", e => {
       err += (err ? "\n" : "") + (e?.message || String(e));
       resolve({ stdout: out, stderr: err, code: 127 });
     });
-    p.on("close", (code) => resolve({ stdout: out, stderr: err, code: code ?? 0 }));
+    p.on("close", code => resolve({ stdout: out, stderr: err, code: code ?? 0 }));
   });
+}
+
+function resolveYtDlpPath(): string {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const mod = require("yt-dlp-bin");
+  return mod?.path || mod?.default || mod;
 }
 
 function sanitize(name: string, maxLen = 200) {
@@ -54,41 +40,40 @@ export async function POST(req: NextRequest) {
     if (!url) return NextResponse.json({ error: "Missing url" }, { status: 400 });
     const fmt = (format || "flac").toLowerCase();
 
-    const ytdlp = await ensureYtDlp();
-    const ffmpeg = ffmpegPath as string;
-    if (!ffmpeg) return NextResponse.json({ error: "ffmpeg-static no disponible" }, { status: 500 });
+    const ytdlp = resolveYtDlpPath();
 
-    // Probe para título/id/duración
+    // 1) Probe (JSON)
     const probeArgs = ["--dump-single-json", "--no-warnings", url];
     const probe = await run(ytdlp, probeArgs);
     if (probe.code !== 0) {
-      return NextResponse.json({ error: "yt-dlp probe error", details: (probe.stderr || probe.stdout)?.slice(0, 2000) }, { status: 500 });
+      return NextResponse.json({ error: "yt-dlp probe error", details: probe.stderr || probe.stdout }, { status: 500 });
     }
-    const probeJson = JSON.parse(probe.stdout);
-    const entry = probeJson?.entries?.[0] ?? probeJson;
+    const j = JSON.parse(probe.stdout);
+    const entry = j?.entries?.[0] ?? j;
     const id = entry?.id || "audio";
     const title = entry?.title || "audio";
     const duration = entry?.duration ?? 0;
 
     if (duration && duration > 600) {
-      return NextResponse.json({ error: "El video es muy largo para el plan actual (≤ 10 min aprox.)" }, { status: 400 });
+      return NextResponse.json({ error: "El video es muy largo para el plan actual (~5 min de ejecución)." }, { status: 400 });
     }
 
+    // 2) Descargar/convertir a /tmp
     const base = sanitize(`${title}.${id}`);
     const outTpl = `${base}.%(ext)s`;
     const args = [
       "-x", "--audio-format", fmt,
       "--embed-thumbnail", "--add-metadata",
-      "--ffmpeg-location", ffmpeg,
+      "--ffmpeg-location", ffmpegPath as string,
       "-o", outTpl, url
     ];
-    const cwd = "/tmp";
-    const dl = await run(ytdlp, args, cwd);
+    const dl = await run(ytdlp, args, "/tmp");
     if (dl.code !== 0) {
-      return NextResponse.json({ error: "Fallo yt-dlp", details: (dl.stderr || dl.stdout)?.slice(0, 2000) }, { status: 500 });
+      return NextResponse.json({ error: "Fallo yt-dlp", details: dl.stderr || dl.stdout }, { status: 500 });
     }
 
-    const outPath = path.join(cwd, `${base}.${fmt}`);
+    // 3) Subir a Blob
+    const outPath = path.join("/tmp", `${base}.${fmt}`);
     const file = await fs.readFile(outPath);
     const putRes = await put(`audio/${base}.${fmt}`, file, {
       access: "public",
