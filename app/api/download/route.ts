@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import path from "node:path";
 import fs from "node:fs/promises";
-import ytdlp from "yt-dlp-exec";
+import ytdlp from "youtube-dl-exec";
 import ffmpegPath from "ffmpeg-static";
 import { put } from "@vercel/blob";
 
