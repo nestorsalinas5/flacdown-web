@@ -5,24 +5,24 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
+// Ejecuta yt-dlp y devuelve stdout/stderr/código
 async function runYtDlp(args: string[]): Promise<{ out: string; err: string; code: number }> {
-  const ytdlp = new YTDlpWrap();
+  const ytdlp = new (YTDlpWrap as any)();
   return await new Promise((resolve) => {
     let out = "", err = "";
-    const p = ytdlp.exec(args);
-    p.stdout?.on("data", d => (out += d.toString()));
-    p.stderr?.on("data", d => (err += d.toString()));
-    p.once("error", (e) => resolve({ out, err: err || (e as any)?.message || "spawn error", code: 127 }));
-    p.once("close", (code) => resolve({ out, err, code: code ?? 0 }));
+    const p: any = ytdlp.exec(args);
+    p?.stdout?.on("data", (d: Buffer) => (out += d.toString()));
+    p?.stderr?.on("data", (d: Buffer) => (err += d.toString()));
+    p?.once("error", (e: any) => resolve({ out, err: err || e?.message || "spawn error", code: 127 }));
+    p?.once("close", (code: number) => resolve({ out, err, code: code ?? 0 }));
   });
 }
 
+// Si el binario no está, lo descarga de GitHub y reintenta
 async function runWithAutoDownload(args: string[]) {
-  // 1er intento
   let res = await runYtDlp(args);
-  // Si falla por binario ausente, descarga y reintenta una vez
   if (res.code === 127 || /ENOENT|not found|no such file/i.test(res.err)) {
-    await YTDlpWrap.downloadFromGithub();
+    await (YTDlpWrap as any).downloadFromGithub();
     res = await runYtDlp(args);
   }
   return res;
