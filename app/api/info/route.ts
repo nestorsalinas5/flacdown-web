@@ -5,39 +5,39 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-async function ensureBinary() {
-  try {
-    // Si ya existe, devuelve la ruta
-    const p = await YTDlpWrap.getYtdlpBinary();
-    return p;
-  } catch {
-    // Descarga el binario desde GitHub a la ruta por defecto
+async function runYtDlp(args: string[]): Promise<{ out: string; err: string; code: number }> {
+  const ytdlp = new YTDlpWrap();
+  return await new Promise((resolve) => {
+    let out = "", err = "";
+    const p = ytdlp.exec(args);
+    p.stdout?.on("data", d => (out += d.toString()));
+    p.stderr?.on("data", d => (err += d.toString()));
+    p.once("error", (e) => resolve({ out, err: err || (e as any)?.message || "spawn error", code: 127 }));
+    p.once("close", (code) => resolve({ out, err, code: code ?? 0 }));
+  });
+}
+
+async function runWithAutoDownload(args: string[]) {
+  // 1er intento
+  let res = await runYtDlp(args);
+  // Si falla por binario ausente, descarga y reintenta una vez
+  if (res.code === 127 || /ENOENT|not found|no such file/i.test(res.err)) {
     await YTDlpWrap.downloadFromGithub();
-    return await YTDlpWrap.getYtdlpBinary();
+    res = await runYtDlp(args);
   }
+  return res;
 }
 
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get("q");
   if (!q) return NextResponse.json({ error: "Missing q" }, { status: 400 });
 
-  try {
-    await ensureBinary();
-    const ytdlp = new YTDlpWrap(); // usará el binario por defecto
+  const args = ["--dump-single-json", "--no-warnings", q];
 
-    const args = ["--dump-single-json", "--no-warnings", q];
-
-    const stdout = await new Promise<string>((resolve, reject) => {
-      let out = "", err = "";
-      const proc = ytdlp.exec(args);
-      proc.stdout?.on("data", (d) => (out += d.toString()));
-      proc.stderr?.on("data", (d) => (err += d.toString()));
-      proc.once("error", (e) => reject(new Error(err || (e as any)?.message || "yt-dlp error")));
-      proc.once("close", (code) => (code === 0 ? resolve(out) : reject(new Error(err || out || `exit ${code}`))));
-    });
-
-    return new NextResponse(stdout, { headers: { "content-type": "application/json; charset=utf-8" } });
-  } catch (e: any) {
-    return NextResponse.json({ error: "yt-dlp error", details: e?.message ?? String(e) }, { status: 500 });
+  const { out, err, code } = await runWithAutoDownload(args);
+  if (code !== 0) {
+    return NextResponse.json({ error: "yt-dlp error", details: err || out }, { status: 500 });
   }
+
+  return new NextResponse(out, { headers: { "content-type": "application/json; charset=utf-8" } });
 }
