@@ -1,42 +1,43 @@
 import { NextRequest, NextResponse } from "next/server";
-import { spawn } from "node:child_process";
+import YTDlpWrap from "yt-dlp-wrap";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-function run(cmd: string, args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
-  return new Promise((resolve) => {
-    const p = spawn(cmd, args);
-    let out = "", err = "";
-    p.stdout?.on("data", d => (out += d.toString()));
-    p.stderr?.on("data", d => (err += d.toString()));
-    p.on("error", e => {
-      err += (err ? "\n" : "") + (e?.message || String(e));
-      resolve({ stdout: out, stderr: err, code: 127 });
-    });
-    p.on("close", code => resolve({ stdout: out, stderr: err, code: code ?? 0 }));
-  });
-}
-
-function resolveYtDlpPath(): string {
-  // yt-dlp-bin expone .path (CommonJS); en ESM puede venir como default
-  // usamos require dinámico para mayor compatibilidad
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const mod = require("yt-dlp-bin");
-  return mod?.path || mod?.default || mod;
+async function ensureBinary() {
+  try {
+    // Si ya existe, devuelve la ruta
+    const p = await YTDlpWrap.getYtdlpBinary();
+    return p;
+  } catch {
+    // Descarga el binario desde GitHub a la ruta por defecto
+    await YTDlpWrap.downloadFromGithub();
+    return await YTDlpWrap.getYtdlpBinary();
+  }
 }
 
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get("q");
   if (!q) return NextResponse.json({ error: "Missing q" }, { status: 400 });
 
-  const ytdlp = resolveYtDlpPath();
-  const args = ["--dump-single-json", "--no-warnings", q];
+  try {
+    await ensureBinary();
+    const ytdlp = new YTDlpWrap(); // usará el binario por defecto
 
-  const { stdout, stderr, code } = await run(ytdlp, args);
-  if (code !== 0) {
-    return NextResponse.json({ error: "yt-dlp error", details: stderr || stdout }, { status: 500 });
+    const args = ["--dump-single-json", "--no-warnings", q];
+
+    const stdout = await new Promise<string>((resolve, reject) => {
+      let out = "", err = "";
+      const proc = ytdlp.exec(args);
+      proc.stdout?.on("data", (d) => (out += d.toString()));
+      proc.stderr?.on("data", (d) => (err += d.toString()));
+      proc.once("error", (e) => reject(new Error(err || (e as any)?.message || "yt-dlp error")));
+      proc.once("close", (code) => (code === 0 ? resolve(out) : reject(new Error(err || out || `exit ${code}`))));
+    });
+
+    return new NextResponse(stdout, { headers: { "content-type": "application/json; charset=utf-8" } });
+  } catch (e: any) {
+    return NextResponse.json({ error: "yt-dlp error", details: e?.message ?? String(e) }, { status: 500 });
   }
-  return new NextResponse(stdout, { headers: { "content-type": "application/json; charset=utf-8" } });
 }
