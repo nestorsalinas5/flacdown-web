@@ -1,6 +1,12 @@
-
 {
   "functions": {
-    "app/api/download/route.ts": { "maxDuration": 300 }
+    "app/api/info/route.ts": {
+      "includeFiles": ["bin/yt-dlp"],
+      "maxDuration": 30
+    },
+    "app/api/download/route.ts": {
+      "includeFiles": ["bin/yt-dlp"],
+      "maxDuration": 300
+    }
   }
 }
