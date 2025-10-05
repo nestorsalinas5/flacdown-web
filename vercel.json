@@ -1,11 +1,9 @@
 {
   "functions": {
     "app/api/info/route.ts": {
-      "includeFiles": "bin/**",
       "maxDuration": 30
     },
     "app/api/download/route.ts": {
-      "includeFiles": "bin/**",
       "maxDuration": 300
     }
   }
