@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import ytdlp from "yt-dlp-exec";
+import ytdlp from "youtube-dl-exec";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
