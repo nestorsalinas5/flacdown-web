@@ -6,11 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start"
-    // 👈 elimina "postinstall": "node scripts/fetch-binaries.cjs"
   },
   "dependencies": {
     "@vercel/blob": "latest",
-    "ffmpeg-static": "^5.2.0",       // 👈 agregado
+    "ffmpeg-static": "^5.2.0",
     "next": "14.2.5",
     "react": "18.2.0",
     "react-dom": "18.2.0"
