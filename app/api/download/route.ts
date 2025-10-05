@@ -7,7 +7,7 @@ import { put } from "@vercel/blob";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 300;
+export const maxDuration = 300; // límite del plan Hobby
 
 function sanitize(name: string, maxLen = 200) {
   const cleaned = name.replace(/[\\/:*?"<>|\n\r\t]+/g, " ").replace(/\s+/g, " ").trim();
@@ -15,21 +15,21 @@ function sanitize(name: string, maxLen = 200) {
 }
 
 async function runYtDlp(args: string[], cwd?: string): Promise<{ out: string; err: string; code: number }> {
-  const ytdlp = new YTDlpWrap();
+  const ytdlp = new (YTDlpWrap as any)();
   return await new Promise((resolve) => {
     let out = "", err = "";
-    const p = ytdlp.exec(args, { cwd });
-    p.stdout?.on("data", d => (out += d.toString()));
-    p.stderr?.on("data", d => (err += d.toString()));
-    p.once("error", (e) => resolve({ out, err: err || (e as any)?.message || "spawn error", code: 127 }));
-    p.once("close", (code) => resolve({ out, err, code: code ?? 0 }));
+    const p: any = ytdlp.exec(args, { cwd });
+    p?.stdout?.on("data", (d: Buffer) => (out += d.toString()));
+    p?.stderr?.on("data", (d: Buffer) => (err += d.toString()));
+    p?.once("error", (e: any) => resolve({ out, err: err || e?.message || "spawn error", code: 127 }));
+    p?.once("close", (code: number) => resolve({ out, err, code: code ?? 0 }));
   });
 }
 
 async function runWithAutoDownload(args: string[], cwd?: string) {
   let res = await runYtDlp(args, cwd);
   if (res.code === 127 || /ENOENT|not found|no such file/i.test(res.err)) {
-    await YTDlpWrap.downloadFromGithub(); // baja el ejecutable oficial
+    await (YTDlpWrap as any).downloadFromGithub();
     res = await runYtDlp(args, cwd);
   }
   return res;
@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
     if (!url) return NextResponse.json({ error: "Missing url" }, { status: 400 });
     const fmt = (format || "flac").toLowerCase();
 
-    // 1) Probe
+    // 1) Obtener metadatos (para título/id/duración)
     const probe = await runWithAutoDownload(["--dump-single-json", "--no-warnings", url]);
     if (probe.code !== 0) {
       return NextResponse.json({ error: "yt-dlp probe error", details: probe.err || probe.out }, { status: 500 });
@@ -52,12 +52,12 @@ export async function POST(req: NextRequest) {
     const title = entry?.title || "audio";
     const duration = entry?.duration ?? 0;
 
-    // Límite rápido para Hobby (evita timeouts >300s)
+    // Límite para evitar timeout en 300s (≈ vídeos muy largos)
     if (duration && duration > 600) {
-      return NextResponse.json({ error: "El video es muy largo para el plan actual (~5 min de ejecución)." }, { status: 400 });
+      return NextResponse.json({ error: "El video es muy largo para el plan actual (~5 min de ejecución). Prueba MP3/OPUS o algo más corto." }, { status: 400 });
     }
 
-    // 2) Descargar/convertir a /tmp
+    // 2) Descargar y convertir en /tmp usando ffmpeg-static
     const base = sanitize(`${title}.${id}`);
     const outTpl = `${base}.%(ext)s`;
     const args = [
@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Fallo yt-dlp", details: dl.err || dl.out }, { status: 500 });
     }
 
-    // 3) Subir a Blob
+    // 3) Subir a Vercel Blob
     const outPath = path.join("/tmp", `${base}.${fmt}`);
     const file = await fs.readFile(outPath);
     const putRes = await put(`audio/${base}.${fmt}`, file, {
