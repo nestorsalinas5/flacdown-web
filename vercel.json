@@ -1,6 +1,6 @@
 {
   "functions": {
-    "app/api/info/route.ts": { "maxDuration": 30 },
+    "app/api/info/route.ts": { "maxDuration": 120 },
     "app/api/download/route.ts": { "maxDuration": 300 }
   }
 }
