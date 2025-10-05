@@ -9,35 +9,27 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-const YTDLP_PATH = "/tmp/yt-dlp";
+const SRC_BIN = path.join(process.cwd(), "public", "yt-dlp-linux");
+const TMP_BIN = "/tmp/yt-dlp";
 
 function sanitize(name: string, maxLen = 200) {
   const cleaned = name.replace(/[\\/:*?"<>|\n\r\t]+/g, " ").replace(/\s+/g, " ").trim();
   return cleaned.slice(0, maxLen);
 }
 
-async function ensureBinaryInTmp() {
+async function ensureYtDlpInTmp() {
   try {
-    await fs.access(YTDLP_PATH);
-    return YTDLP_PATH;
+    await fs.access(TMP_BIN);
+    return TMP_BIN;
   } catch {
-    await (YTDlpWrap as any).downloadFromGithub("/tmp");
-    try {
-      await fs.access(YTDLP_PATH);
-      return YTDLP_PATH;
-    } catch {
-      const entries = await fs.readdir("/tmp");
-      const hit = entries.find((f) => f.toLowerCase().startsWith("yt-dlp"));
-      if (!hit) throw new Error("No se encontró binario yt-dlp en /tmp tras la descarga");
-      const resolved = path.join("/tmp", hit);
-      try { await fs.link(resolved, YTDLP_PATH); } catch {}
-      return YTDLP_PATH;
-    }
+    await fs.copyFile(SRC_BIN, TMP_BIN);
+    await fs.chmod(TMP_BIN, 0o755);
+    return TMP_BIN;
   }
 }
 
-async function runYtDlp(args: string[], cwd?: string): Promise<{ out: string; err: string; code: number }> {
-  const ytdlp = new (YTDlpWrap as any)(YTDLP_PATH);
+async function runYtDlp(binPath: string, args: string[], cwd?: string): Promise<{ out: string; err: string; code: number }> {
+  const ytdlp = new (YTDlpWrap as any)(binPath);
   return await new Promise((resolve) => {
     let out = "", err = "";
     const p: any = ytdlp.exec(args, { cwd });
@@ -54,11 +46,12 @@ export async function POST(req: NextRequest) {
     if (!url) return NextResponse.json({ error: "Missing url" }, { status: 400 });
     const fmt = (format || "flac").toLowerCase();
 
-    // 1) Asegura binario en /tmp
-    await ensureBinaryInTmp();
+    // Asegura que subiste el binario y que está en /tmp con +x
+    await fs.access(SRC_BIN);
+    const binPath = await ensureYtDlpInTmp();
 
-    // 2) Probe (para título/id/duración)
-    const probe = await runYtDlp(["--dump-single-json", "--no-warnings", url]);
+    // 1) Probe (JSON) para título/id/duración
+    const probe = await runYtDlp(binPath, ["--dump-single-json", "--no-warnings", url]);
     if (probe.code !== 0) {
       return NextResponse.json({ error: "yt-dlp probe error", details: probe.err || probe.out }, { status: 500 });
     }
@@ -68,14 +61,14 @@ export async function POST(req: NextRequest) {
     const title = entry?.title || "audio";
     const duration = entry?.duration ?? 0;
 
-    // 3) Límite para evitar timeouts en plan Hobby
+    // Límite por plan Hobby (300s): evita trabajos muy largos
     if (duration && duration > 600) {
       return NextResponse.json({
         error: "El video es muy largo para el plan actual (~5 min de ejecución). Prueba MP3/OPUS o algo más corto."
       }, { status: 400 });
     }
 
-    // 4) Descargar/convertir en /tmp usando ffmpeg-static
+    // 2) Descargar/convertir en /tmp usando ffmpeg-static
     const base = sanitize(`${title}.${id}`);
     const outTpl = `${base}.%(ext)s`;
     const args = [
@@ -84,12 +77,12 @@ export async function POST(req: NextRequest) {
       "--ffmpeg-location", String(ffmpegPath),
       "-o", outTpl, url
     ];
-    const dl = await runYtDlp(args, "/tmp");
+    const dl = await runYtDlp(binPath, args, "/tmp");
     if (dl.code !== 0) {
       return NextResponse.json({ error: "Fallo yt-dlp", details: dl.err || dl.out }, { status: 500 });
     }
 
-    // 5) Subir a Vercel Blob
+    // 3) Subir a Vercel Blob
     const outPath = path.join("/tmp", `${base}.${fmt}`);
     const file = await fs.readFile(outPath);
     const putRes = await put(`audio/${base}.${fmt}`, file, {
